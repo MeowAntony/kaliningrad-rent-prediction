@@ -12,11 +12,20 @@ from selenium.webdriver.support import expected_conditions as EC
 BASE_URL = "https://www.avito.ru/kaliningrad/kvartiry/sdam/posutochno/-ASgBAgICAkSSA8gQ8AeSUg?context=H4sIAAAAAAAA_wEjANz_YToxOntzOjg6ImZyb21QYWdlIjtzOjc6ImNhdGFsb2ciO312FITcIwAAAA"
 OUTPUT_FILE = "avito_data.json"
 DATA_DIR = 'data'
-PAGES_MAX = 40
+PAGES_MAX = 2
 
 def get_random_sleep():
     return random.uniform(3, 5)
 
+def clean_text(text):
+    if text:
+        return text.strip().replace("\u00a0", " ")
+    return None
+
+def save_data(data, filepath):
+    with open(filepath, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+        
 def parse_item(item):
     data = {
         "id": None,
@@ -34,33 +43,38 @@ def parse_item(item):
     }
 
     try:
-        data["id"] = item.get("data-item-id")
+        raw_id = item.get("data-item-id")
+        if raw_id:
+            data["id"] = raw_id.strip()
 
         title_link = item.find("a", attrs={"data-marker": "item-title"})
         if title_link:
-            data["title"] = title_link.get("title")
+            data["title"] = clean_text(title_link.get("title"))
             href = title_link.get("href")
             if href:
                 data["url"] = "https://www.avito.ru" + href
 
         desc_meta = item.find("meta", attrs={"itemprop": "description"})
         if desc_meta:
-            data["description"] = desc_meta.get("content")
+            data["description"] = clean_text(desc_meta.get("content"))
 
         price_meta = item.find("meta", attrs={"itemprop": "price"})
         if price_meta:
-            data["price"] = price_meta.get("content")
+            data["price"] = clean_text(price_meta.get("content"))
         
         price_tag = item.find("p", attrs={"data-marker": "item-price"})
         if price_tag:
-            data["price_text"] = price_tag.get_text(strip=True).replace("\u00a0", " ")
+            data["price_text"] = clean_text(price_tag.get_text(strip=True))
 
         rating_block = item.find("div", attrs={"data-marker": "rating-and-reviews"})
         if rating_block:
             spans = rating_block.find_all("span")
             if spans:
                 for span in spans:
-                    text = span.get_text(strip=True)
+                    text = clean_text(span.get_text(strip=True))
+                    if not text:
+                        continue
+                    
                     if "," in text and len(text) <= 4:
                         data["rating"] = text
                     elif "отзыв" in text:
@@ -72,46 +86,50 @@ def parse_item(item):
             if seller_link:
                  name_p = seller_link.find("p") or seller_link.find("span")
                  if name_p:
-                     data["seller_name"] = name_p.get_text(strip=True)
+                     data["seller_name"] = clean_text(name_p.get_text(strip=True))
                  else:
-                     data["seller_name"] = seller_link.get_text(strip=True)
+                     data["seller_name"] = clean_text(seller_link.get_text(strip=True))
             
             seller_score = seller_block.find("span", attrs={"data-marker": "seller-rating/score"})
             if seller_score:
-                data["seller_rating"] = seller_score.get_text(strip=True)
+                data["seller_rating"] = clean_text(seller_score.get_text(strip=True))
             
             seller_summary = seller_block.find("p", attrs={"data-marker": "seller-info/summary"})
             if not seller_summary:
                  seller_summary = seller_block.find("span", attrs={"data-marker": "seller-info/summary"})
             
             if seller_summary:
-                data["seller_reviews"] = seller_summary.get_text(strip=True)
-        
+                data["seller_reviews"] = clean_text(seller_summary.get_text(strip=True))
         
         badges_elements = item.find_all("div", class_=lambda x: x and "SnippetBadge" in x)
         for badge in badges_elements:
+            val_to_add = None
             text_span = badge.find("span")
+            
             if not text_span:
                 content_div = badge.find("div", class_=lambda x: x and "content" in x.lower())
                 if content_div:
-                    data["badges"].append(content_div.get_text(strip=True))
+                    val_to_add = clean_text(content_div.get_text(strip=True))
                 else:
-                    text = badge.get_text(strip=True)
-                    if text and len(text) < 30: 
-                        data["badges"].append(text)
+                    raw_text = badge.get_text(strip=True)
+                    if raw_text and len(raw_text) < 30: 
+                        val_to_add = clean_text(raw_text)
             else:
-                data["badges"].append(text_span.get_text(strip=True))
-
-        data["badges"] = list(set([b for b in data["badges"] if b]))
+                val_to_add = clean_text(text_span.get_text(strip=True))
+            
+            if val_to_add:
+                data["badges"].append(val_to_add)
 
     except Exception as e:
-        print(f"Ошибка при парсинге: {e}")
+        print(f"Ошибка при парсинге элемента: {e}")
 
     return data
 
 def main():
     if not os.path.exists(DATA_DIR):
         os.makedirs(DATA_DIR)
+    
+    output_path = f'{DATA_DIR}/{OUTPUT_FILE}'
     
     options = uc.ChromeOptions()
     driver = uc.Chrome(options=options)
@@ -125,25 +143,31 @@ def main():
             
             driver.get(url)
             
-            try:
-                WebDriverWait(driver, 15).until(
+            try: # Интересное замечание, этот код неплохой такой captcha чекер
+                WebDriverWait(driver, 30).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, '[data-marker="item"]'))
                 )
             except:
                 print("Ошибка ожидания")
                 break
-
+            
+            time.sleep(2)
+               
             page_source = driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
             
             container = soup.find("div", attrs={"data-marker": "catalog-serp"})
+            if not container:
+                print("Не найден контейнер объявлений")
+                break
+                
             items = container.find_all("div", attrs={"data-marker": "item"})
 
             if not items:
-                print("Нету объявлений(")
+                print("Нет объявлений на странице")
                 break
 
-            print(f"Всего {len(items)} объектов")
+            print(f"Всего {len(items)} объектов на странице")
 
             for item_html in items:
                 item_data = parse_item(item_html)
@@ -157,11 +181,10 @@ def main():
     finally:
         driver.quit()
 
-    with open(f'{DATA_DIR}/{OUTPUT_FILE}', "w", encoding="utf-8") as f:
-        json.dump(all_results, f, ensure_ascii=False, indent=4)
+    save_data(all_results, output_path)
     
-    print(f"Всё успешно сохранилось в {DATA_DIR}/{OUTPUT_FILE}")
-    print(f'записей: {len(all_results)}')
+    print(f"Всё успешно сохранилось в {output_path}")
+    print(f'Всего записей: {len(all_results)}')
 
 if __name__ == "__main__":
     main()
