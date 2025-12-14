@@ -3,6 +3,7 @@ import json
 import random
 import undetected_chromedriver as uc
 import os
+
 from bs4 import BeautifulSoup
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
@@ -11,10 +12,10 @@ from selenium.webdriver.support import expected_conditions as EC
 BASE_URL = "https://www.avito.ru/kaliningrad/kvartiry/sdam/posutochno/-ASgBAgICAkSSA8gQ8AeSUg?context=H4sIAAAAAAAA_wEjANz_YToxOntzOjg6ImZyb21QYWdlIjtzOjc6ImNhdGFsb2ciO312FITcIwAAAA"
 OUTPUT_FILE = "avito_data.json"
 DATA_DIR = 'data'
-PAGES_MAX = 2
+PAGES_MAX = 40
 
 def get_random_sleep():
-    return random.uniform(3, 6)
+    return random.uniform(3, 5)
 
 def parse_item(item):
     data = {
@@ -104,7 +105,7 @@ def parse_item(item):
         data["badges"] = list(set([b for b in data["badges"] if b]))
 
     except Exception as e:
-        print(f"Error parsing item {data.get('id', 'unknown')}: {e}")
+        print(f"Ошибка при парсинге: {e}")
 
     return data
 
